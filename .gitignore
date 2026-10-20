@@ -1,0 +1,12 @@
+# 真实密钥与本地数据，绝不提交
+config.json
+data/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+*.local

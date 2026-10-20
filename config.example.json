@@ -1,0 +1,18 @@
+{
+  "port": 5178,
+  "model": {
+    "provider": "glm",
+    "apiKey": "把你的智谱GLM免费Key粘贴到这里",
+    "model": "glm-4-air",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+  },
+  "juhe": {
+    "hotKey": "全网热搜接口的Key",
+    "url": "https://apis.juhe.cn/fapigx/networkhot/query",
+    "newsKey": "新闻列表接口的Key",
+    "newsUrl": "https://v.juhe.cn/toutiao/index",
+    "briefKey": "AI简报接口的Key",
+    "briefUrl": "https://apis.juhe.cn/fapigw/aibrief/list"
+  },
+  "_说明": "复制本文件为 config.json 并填入你自己的 Key（apiKey 留空则用本地规则引擎跑通全流程）。聚合数据的 Key 是按接口单独授权的。baseUrl/model 可改成任意 OpenAI 兼容端点，如 DeepSeek：baseUrl=https://api.deepseek.com/chat/completions，model=deepseek-chat。"
+}
