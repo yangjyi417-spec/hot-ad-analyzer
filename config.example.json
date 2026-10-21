@@ -6,6 +6,12 @@
     "model": "glm-4-air",
     "baseUrl": "https://open.bigmodel.cn/api/paas/v4/chat/completions"
   },
+  "vision": {
+    "model": "glm-4v-flash",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    "apiKey": "留空则自动复用上面 model.apiKey（同一个智谱 Key 即可）"
+  },
+  "browser": "留空则自动探测本机 Chrome/Edge；如需指定，填可执行文件绝对路径，例如 C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe",
   "juhe": {
     "hotKey": "全网热搜接口的Key",
     "url": "https://apis.juhe.cn/fapigx/networkhot/query",
@@ -14,5 +20,5 @@
     "briefKey": "AI简报接口的Key",
     "briefUrl": "https://apis.juhe.cn/fapigw/aibrief/list"
   },
-  "_说明": "复制本文件为 config.json 并填入你自己的 Key（apiKey 留空则用本地规则引擎跑通全流程）。聚合数据的 Key 是按接口单独授权的。baseUrl/model 可改成任意 OpenAI 兼容端点，如 DeepSeek：baseUrl=https://api.deepseek.com/chat/completions，model=deepseek-chat。"
+  "_说明": "复制本文件为 config.json 并填入你自己的 Key（apiKey 留空则用本地规则引擎跑通全流程，且不做截图读图）。分析时会先用无头浏览器对热点原文页截图，再用视觉模型（vision.model，默认免费的 glm-4v-flash）读图生成「内容概述」，并把概述并入上下文喂给 12 维分析——所以报告是「先看真实内容、再拆解」。聚合数据的 Key 是按接口单独授权的。baseUrl/model 可改成任意 OpenAI 兼容端点，如 DeepSeek：baseUrl=https://api.deepseek.com/chat/completions，model=deepseek-chat（但 DeepSeek 无视觉模型，读图仍需 GLM 的 vision 配置）。"
 }

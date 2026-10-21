@@ -85,6 +85,21 @@
   .rgrid{display:flex;flex-direction:column;gap:16px;margin-bottom:16px}
   .rgrid .panel.radar{display:flex;flex-direction:column;align-items:center}
   .rgrid .panel.radar svg{max-width:100%;height:auto}
+
+  .shotbox{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px}
+  .shotbox .shotthumb{flex:0 0 auto}
+  .shotimg{width:230px;max-width:45vw;border:1px solid var(--line);border-radius:10px;display:block;cursor:zoom-in;background:var(--panel2);transition:border-color .15s,transform .1s}
+  .shotimg:hover{border-color:var(--accent)}
+  .shotmeta{font-size:11px;color:var(--sub);margin-top:6px}
+  .ovwwrap{flex:1 1 320px;min-width:260px}
+  .ovwt{font-size:12px;color:var(--sub);letter-spacing:1px;margin-bottom:8px;font-weight:600}
+  .ovw{font-size:14px;color:#d3d9e3;line-height:1.95;text-align:justify;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:14px 16px}
+  .facts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .fact{font-size:12px;color:#c4cad6;background:rgba(77,140,255,.10);border:1px solid rgba(77,140,255,.22);padding:3px 10px;border-radius:7px}
+  .caution{font-size:12px;color:var(--warn);background:rgba(242,182,50,.12);border:1px solid var(--warn);padding:6px 12px;border-radius:8px;margin-top:12px}
+  .caution::before{content:"⚠ ";}
+  .shotfail{font-size:12px;color:var(--sub);background:var(--panel2);border:1px dashed var(--line);padding:8px 12px;border-radius:8px;margin-bottom:16px}
+
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
   .panel h4{font-size:13px;color:var(--sub);margin-bottom:12px;letter-spacing:1px}
   svg{display:block;margin:0 auto;overflow:visible}
@@ -234,26 +249,31 @@ function renderPool(list, containerId){
 
 // ---- 分析 ----
 let _analyzeTimer = null;
-async function analyze(h, force){
+async function analyze(h, force, shot){
   lastHot=h;
+  if(shot===undefined) shot=true;
   document.getElementById('poolView').style.display='none';
   document.getElementById('intro').style.display='none';
   const av=document.getElementById('archiveView'); if(av) av.style.display='none';
   const R=document.getElementById('report'); R.className='show';
   if(_analyzeTimer){ clearInterval(_analyzeTimer); _analyzeTimer=null; }
   const t0=Date.now();
+  const stageMsg = shot
+    ? '正在真实截图 → 读图生成内容概述 → 按 12 维拆解（首次约 20–40 秒）'
+    : '正在按 12 维拆解…';
   R.innerHTML=`<div class="loading">
-      <div style="font-size:14px;color:var(--txt);margin-bottom:12px">正在按 12 维拆解「${esc(h.title)}」…</div>
+      <div style="font-size:14px;color:var(--txt);margin-bottom:12px">${esc(h.title)}</div>
+      <div style="font-size:12.5px;color:var(--sub);margin-bottom:12px">${stageMsg}</div>
       <div class="prog"><i></i></div>
-      <div id="elapsed" style="margin-top:12px;font-size:12px;color:var(--sub)">已用 0.0s · 大模型逐维分析中</div>
+      <div id="elapsed" style="margin-top:12px;font-size:12px;color:var(--sub)">已用 0.0s</div>
     </div>`;
   _analyzeTimer=setInterval(()=>{
     const el=document.getElementById('elapsed');
-    if(el) el.textContent='已用 '+((Date.now()-t0)/1000).toFixed(1)+'s · 大模型逐维分析中';
+    if(el) el.textContent='已用 '+((Date.now()-t0)/1000).toFixed(1)+'s'+(shot?' · 截图/读图/逐维分析中':' · 逐维分析中');
   },100);
   try{
     const r=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({id:h.id,title:h.title,source:h.source,sourceName:h.sourceName,heatText:h.heatText,context:h.extra||'',date:h.date,rank:h.rank,url:h.url,force:!!force})});
+      body:JSON.stringify({id:h.id,title:h.title,source:h.source,sourceName:h.sourceName,heatText:h.heatText,context:h.extra||'',date:h.date,rank:h.rank,url:h.url,force:!!force,shot:shot?'on':'off'})});
     const d=await r.json();
     if(_analyzeTimer){ clearInterval(_analyzeTimer); _analyzeTimer=null; }
     renderReport(h,d);
@@ -261,6 +281,27 @@ async function analyze(h, force){
     if(_analyzeTimer){ clearInterval(_analyzeTimer); _analyzeTimer=null; }
     R.innerHTML='<div class="err">分析失败：'+e.message+'</div>';
   }
+}
+
+function shotBlockHTML(d){
+  if(d.shot){
+    const ov=d.overview||{};
+    const facts=(ov.facts||[]).filter(Boolean).map(f=>`<span class="fact">${esc(f)}</span>`).join('');
+    return `<div class="shotbox">
+      <div class="shotthumb">
+        <img class="shotimg" src="${esc(d.shot)}" alt="热点截图" onclick="window.open('${esc(d.shot)}','_blank')" title="点击查看大图">
+        <div class="shotmeta">📸 真实网页截图 · 点击放大</div>
+      </div>
+      <div class="ovwwrap">
+        <div class="ovwt">📌 内容概述（视觉模型读图所得 · 分析依据）</div>
+        ${ov.overview?`<div class="ovw">${esc(ov.overview)}</div>`:(d.shotError?`<div class="ovw">（读图未完成：${esc(d.shotError)}）</div>`:'')}
+        ${facts?`<div class="facts">${facts}</div>`:''}
+        ${ov.caution?`<div class="caution">${esc(ov.caution)}</div>`:''}
+      </div>
+    </div>`;
+  }
+  if(d.shotError) return `<div class="shotfail">未能取得截图/读图，本次基于标题与热度分析。原因：${esc(d.shotError)}</div>`;
+  return '';
 }
 
 function renderReport(h,d){
@@ -271,7 +312,8 @@ function renderReport(h,d){
       <button class="back" onclick="backToPool()">← 返回热点池</button>
       <div class="rt">${esc(h.title)}</div>
       ${d.cached?'<span style="color:var(--good);font-size:12px">⚡ 已缓存 · 秒开</span>':''}
-      <button class="btn ghost" onclick="analyze(lastHot,true)">重新分析</button>
+      <button class="btn ghost" onclick="analyze(lastHot,true,true)">📸 重新截图分析</button>
+      <button class="btn ghost" onclick="analyze(lastHot,true,false)">⚡快速分析（不截图）</button>
       <button class="btn ghost" onclick="window.print()">导出 / 打印</button>
     </div>
     <div class="decision">
@@ -284,6 +326,7 @@ function renderReport(h,d){
         <p>${esc(d.conclusionText||'')}</p>
       </div>
     </div>`;
+  html+=shotBlockHTML(d);
 
   // 雷达 + 分组维度
   const dims=dimsArray(d.dims);

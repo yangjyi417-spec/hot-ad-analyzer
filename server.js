@@ -9,6 +9,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
 
 const ROOT = __dirname;
 const PUB = path.join(ROOT, 'public');
@@ -26,9 +28,10 @@ function loadConfig() {
 // ---------- 数据归档 / 分析缓存 ----------
 const DATA_DIR = path.join(ROOT, 'data');
 const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
+const SHOTS_DIR = path.join(DATA_DIR, 'shots');
 const ANALYSES_FILE = path.join(DATA_DIR, 'analyses.json');
 
-function ensureDirs() { try { fs.mkdirSync(ARCHIVE_DIR, { recursive: true }); } catch (e) {} }
+function ensureDirs() { try { fs.mkdirSync(ARCHIVE_DIR, { recursive: true }); fs.mkdirSync(SHOTS_DIR, { recursive: true }); } catch (e) {} }
 function todayStr() { return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10); }
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return fallback; } }
 function writeJson(file, obj) { try { ensureDirs(); fs.writeFileSync(file, JSON.stringify(obj)); return true; } catch (e) { return false; } }
@@ -279,6 +282,86 @@ function localAnalyze(ctx) {
   };
 }
 
+// ---------- 网页截图 + 视觉读图（先说明内容，再分析）----------
+function findBrowser() {
+  const cfg = loadConfig();
+  const cands = [
+    cfg.browser,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  ].filter(Boolean);
+  for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch (e) {} }
+  return null;
+}
+function shotName(ctx) {
+  const hash = crypto.createHash('md5').update((ctx.source || 'src') + '|' + (ctx.title || '')).digest('hex').slice(0, 16);
+  return hash + '.png';
+}
+// 无头浏览器截图：viewport 抓取首屏（1200x1600），带超时保护
+function captureShot(url, outFile, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const browser = findBrowser();
+    if (!browser) return reject(new Error('本机未找到 Chrome/Edge，无法截图'));
+    ensureDirs();
+    const profile = path.join(DATA_DIR, '.browser-profile');
+    const args = ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars',
+      '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check',
+      '--user-data-dir=' + profile,
+      '--timeout=9000',
+      '--window-size=1200,1600', '--virtual-time-budget=9000',
+      '--screenshot=' + outFile, url];
+    let p;
+    try { p = spawn(browser, args); } catch (e) { return reject(e); }
+    let err = '';
+    p.stderr.on('data', d => { err += d; });
+    const to = setTimeout(() => { try { p.kill('SIGKILL'); } catch (e) {} }, timeoutMs || 20000);
+    let settled = false;
+    p.on('close', () => {
+      if (settled) return; settled = true; clearTimeout(to);
+      if (fs.existsSync(outFile) && fs.statSync(outFile).size > 4000) resolve(outFile);
+      else reject(new Error('截图失败：' + (err || '未生成图片').replace(/\s+/g, ' ').slice(0, 90)));
+    });
+    p.on('error', e => { if (settled) return; settled = true; clearTimeout(to); reject(e); });
+  });
+}
+
+// 用视觉大模型「读」截图，客观说明这条热点到底在讲什么
+function visionOverview(imgPath, ctx, cfg) {
+  const v = cfg.vision || {};
+  const b64 = fs.readFileSync(imgPath).toString('base64');
+  const prompt = `这是一条标题为「${ctx.title}」的热点/新闻，在【${ctx.sourceName || '网页'}】上的真实截图。` +
+    `请只依据截图中真实可见的文字与画面，客观说明这条热点到底在讲什么，不要编造截图以外的信息。` +
+    `输出 JSON（字符串内严禁英文双引号，需要引用请用中文「」，换行用逗号），字段如下：` +
+    `{"overview":"两三句话，具体讲清这条热点的事件/人物/数据/进展","facts":["截图可见的关键事实点1","关键事实点2","关键事实点3"],"visible":"截图里出现的主要标题或文字","caution":"是否含敏感/负面/争议/风险内容，简短说明或留空"}`;
+  const body = {
+    model: v.model || 'glm-4v-flash',
+    messages: [{ role: 'user', content: [
+      { type: 'text', text: prompt },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64 } }
+    ] }],
+    temperature: 0.2
+  };
+  return fetch(v.baseUrl || 'https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (v.apiKey || (cfg.model && cfg.model.apiKey)) },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(45000)
+  }).then(async res => {
+    const raw = await res.text();
+    if (!res.ok) throw new Error('视觉模型 HTTP ' + res.status + '：' + raw.slice(0, 120));
+    const j = JSON.parse(raw);
+    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    if (!c) throw new Error('视觉模型返回为空');
+    c = c.replace(/```json|```/g, '').trim();
+    const s = c.indexOf('{'), e = c.lastIndexOf('}');
+    if (s >= 0 && e > s) c = c.slice(s, e + 1);
+    try { return JSON.parse(c); }
+    catch (err) { return { overview: c.slice(0, 300), facts: [], visible: '', caution: '' }; }
+  });
+}
+
 // ---------- 大模型分析（GLM / OpenAI 兼容）----------
 const SYS = '你是资深广告传播分析师，严格遵循给定的"热点广告 12 维分析框架"输出结论。每个维度都要展开写成一段有分量的分析（两三句、80-140字），把这个维度的判断、判断所依据的具体理由、以及对借势的启示讲透，内容要针对这条热点本身、具体不空泛，像专业分析师写的正文。禁止只写一句话结论，也不要使用【依据】【推理】【判断】这类标签或分点前缀。score 仅用于内部雷达图定形（0-5），文字才是重点。所有字符串值内部严禁出现英文双引号（需要引用请用中文「」），换行请用顿号或逗号替代，确保输出能被 JSON.parse 直接解析。只输出 JSON，不要多余文字。';
 function buildPrompt(ctx) {
@@ -419,11 +502,30 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const ctx = JSON.parse(body || '{}');
       const cfg = loadConfig();
+      const hasKey = cfg.model && cfg.model.apiKey && cfg.model.apiKey.trim();
+      const wantShot = ctx.shot !== 'off' && ctx.url && /^https?:\/\//i.test(ctx.url) && hasKey && !!findBrowser();
       if (!ctx.force) {
         const hit = findCached(ctx);
-        if (hit) return sendJson(res, 200, Object.assign({ cached: true }, hit));
+        // 命中缓存：除非「本该有截图却缺图、且此前并未截图失败过」，否则直接返回
+        if (hit && (!wantShot || hit.shot || hit.shotError)) return sendJson(res, 200, Object.assign({ cached: true }, hit));
       }
-      const hasKey = cfg.model && cfg.model.apiKey && cfg.model.apiKey.trim();
+      let shotRel = null, overview = null, shotError = null;
+      if (wantShot) {
+        const fname = shotName(ctx);
+        const fpath = path.join(SHOTS_DIR, fname);
+        try {
+          await captureShot(ctx.url, fpath, 20000);
+          shotRel = '/shots/' + fname;
+          try { overview = await visionOverview(fpath, ctx, cfg); }
+          catch (e) { shotError = '读图失败：' + e.message; }
+        } catch (e) { shotError = e.message; }
+        if (overview && overview.overview) {
+          ctx.context = (ctx.context ? ctx.context + '\n' : '') +
+            '【截图读到的真实内容（分析请以此为准，不要只凭标题臆测）】' + overview.overview +
+            ((overview.facts && overview.facts.length) ? ' 关键事实：' + overview.facts.join('；') : '') +
+            (overview.visible ? ' 截图可见文字：' + overview.visible : '');
+        }
+      }
       let rep;
       if (hasKey) {
         try { rep = await llmAnalyze(ctx, cfg); }
@@ -431,8 +533,22 @@ const server = http.createServer(async (req, res) => {
       } else {
         rep = localAnalyze(ctx);
       }
+      rep.shot = shotRel;
+      rep.overview = overview || null;
+      if (shotError) rep.shotError = shotError;
       if (rep.mode === 'llm' && !rep.llmError) saveAnalysis(ctx, rep);
       return sendJson(res, 200, rep);
+    }
+    if (url.pathname === '/api/shot' && req.method === 'POST') {
+      const body = await readBody(req);
+      const ctx = JSON.parse(body || '{}');
+      const cfg = loadConfig();
+      if (!ctx.url) return sendJson(res, 400, { error: '缺少 url' });
+      if (!findBrowser()) return sendJson(res, 500, { error: '本机未找到 Chrome/Edge' });
+      const fname = shotName(Object.assign({ source: 'shot', title: ctx.url }, ctx));
+      const fpath = path.join(SHOTS_DIR, fname);
+      try { await captureShot(ctx.url, fpath, 20000); return sendJson(res, 200, { shot: '/shots/' + fname }); }
+      catch (e) { return sendJson(res, 500, { error: e.message }); }
     }
     if (url.pathname === '/api/archive/dates') {
       ensureDirs();
@@ -459,6 +575,15 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/config') {
       const cfg = loadConfig();
       return sendJson(res, 200, { llmOn: !!(cfg.model && cfg.model.apiKey && cfg.model.apiKey.trim()), model: cfg.model ? cfg.model.model : null });
+    }
+    if (url.pathname.startsWith('/shots/')) {
+      const safe = path.basename(url.pathname);
+      const f = path.join(SHOTS_DIR, safe);
+      return fs.readFile(f, (err, data) => {
+        if (err) { res.writeHead(404); return res.end('not found'); }
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+        res.end(data);
+      });
     }
     return serveStatic(res, url.pathname);
   } catch (e) {
