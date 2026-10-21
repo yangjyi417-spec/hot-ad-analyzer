@@ -362,6 +362,17 @@ function visionOverview(imgPath, ctx, cfg) {
   });
 }
 
+// 判断截图是不是"验证/拦截/空白"页（而非真实正文）——是就别展示图片、回退文字分析
+function junkShot(ov) {
+  if (!ov || !ov.overview) return true;
+  const txt = ((ov.overview || '') + ' ' + ((ov.facts || []).join(' ')) + ' ' + (ov.visible || '')).toLowerCase();
+  if (!txt.trim()) return true;
+  const kw = ['安全验证', '滑块', '人机验证', '请输入验证码', '验证码', '访问异常', '访问过于频繁',
+    '访问频繁', '404', '页面不存在', '网页不存在', '无法访问', '拒绝访问', '需要登录', '请先登录',
+    '登录后可见', '被拦截', '拦截', 'verify', 'robot', 'forbidden', 'unusual traffic', 'captcha'];
+  return kw.some(k => txt.includes(k));
+}
+
 // ---------- 大模型分析（GLM / OpenAI 兼容）----------
 const SYS = '你是资深广告传播分析师，严格遵循给定的"热点广告 12 维分析框架"输出结论。每个维度都要展开写成一段有分量的分析（两三句、80-140字），把这个维度的判断、判断所依据的具体理由、以及对借势的启示讲透，内容要针对这条热点本身、具体不空泛，像专业分析师写的正文。禁止只写一句话结论，也不要使用【依据】【推理】【判断】这类标签或分点前缀。score 仅用于内部雷达图定形（0-5），文字才是重点。所有字符串值内部严禁出现英文双引号（需要引用请用中文「」），换行请用顿号或逗号替代，确保输出能被 JSON.parse 直接解析。只输出 JSON，不要多余文字。';
 function buildPrompt(ctx) {
@@ -518,6 +529,10 @@ const server = http.createServer(async (req, res) => {
           shotRel = '/shots/' + fname;
           try { overview = await visionOverview(fpath, ctx, cfg); }
           catch (e) { shotError = '读图失败：' + e.message; }
+          if (!shotError && junkShot(overview)) {
+            shotRel = null; overview = null;
+            shotError = '来源页为验证/拦截/空白页，读不到真实内容，已回退按标题分析';
+          }
         } catch (e) { shotError = e.message; }
         if (overview && overview.overview) {
           ctx.context = (ctx.context ? ctx.context + '\n' : '') +

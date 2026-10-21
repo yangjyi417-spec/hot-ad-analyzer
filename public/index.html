@@ -300,7 +300,7 @@ function shotBlockHTML(d){
       </div>
     </div>`;
   }
-  if(d.shotError) return `<div class="shotfail">未能取得截图/读图，本次基于标题与热度分析。原因：${esc(d.shotError)}</div>`;
+  if(d.shotError) return `<div class="shotfail">本次未使用截图，按标题＋热度分析。原因：${esc(d.shotError)}</div>`;
   return '';
 }
 
